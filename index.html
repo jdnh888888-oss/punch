@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>打卡</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --ink:#1d2733; --muted:#5b6774; --in:#1f7a4d; --out:#b4462e; --key:#e9edf1; --bad:#c62828; --warn:#a15c00; --blue:#2b5d9b; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:"Microsoft JhengHei","Noto Sans TC",system-ui,sans-serif; }
+  .wrap { max-width:1200px; margin:0 auto; padding:16px; min-height:100vh; display:flex; flex-direction:column; gap:14px; }
+  header { display:flex; justify-content:space-between; align-items:baseline; }
+  .fac { font-size:26px; font-weight:700; }
+  .clock { font-size:48px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .date { color:var(--muted); font-size:16px; text-align:right; }
+  main { flex:1; display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:16px; min-height:0; }
+  @media (max-width:800px) { main { grid-template-columns:1fr; } }
+  .cam { position:relative; background:#000; border-radius:14px; overflow:hidden; min-height:300px; }
+  .cam video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
+  .frame { position:absolute; inset:18% 22%; border:4px solid rgba(255,255,255,.85); border-radius:16px; box-shadow:0 0 0 2000px rgba(0,0,0,.25); }
+  .cam.paused video { filter:brightness(.35); }
+  .cam.paused .frame { display:none; }
+  .camMsg { position:absolute; inset:auto 0 0 0; padding:10px; color:#fff; background:rgba(0,0,0,.55); text-align:center; font-size:16px; }
+  .camBtn { position:absolute; left:50%; top:45%; transform:translate(-50%,-50%); padding:14px 26px; border:0; border-radius:12px; background:var(--blue); color:#fff; font-size:24px; font-weight:700; }
+  .panel { display:flex; flex-direction:column; gap:14px; min-height:0; }
+  .card { background:var(--card); border-radius:14px; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .prompt { font-size:28px; font-weight:700; line-height:1.3; }
+  .sub { color:var(--muted); font-size:17px; line-height:1.5; }
+  .who { font-size:44px; font-weight:700; line-height:1.2; }
+  .whoCode { color:var(--muted); font-size:20px; }
+  .note { color:var(--warn); font-size:17px; line-height:1.45; font-weight:700; }
+  .actions { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .actions button { height:130px; border:0; border-radius:14px; color:#fff; font-size:34px; font-weight:700; line-height:1.25; }
+  .actions small { display:block; font-size:17px; font-weight:400; }
+  .in { background:var(--in); } .out { background:var(--out); }
+  .plain { width:100%; min-height:64px; border:0; border-radius:12px; background:var(--key); color:var(--ink); font-size:22px; font-weight:700; padding:8px 12px; }
+  .primary { background:var(--blue); color:#fff; }
+  button:active { filter:brightness(.9); }
+  .names { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; overflow:auto; max-height:56vh; padding:2px; }
+  .names button { min-height:64px; border:0; border-radius:12px; background:var(--key); font-size:24px; font-weight:700; color:var(--ink); }
+  .msg { font-size:34px; font-weight:700; text-align:center; line-height:1.3; }
+  .msg.ok { color:var(--in); } .msg.bad { color:var(--bad); } .msg.warn { color:var(--warn); }
+  .big { font-size:56px; text-align:center; font-weight:700; font-variant-numeric:tabular-nums; }
+  .setup { position:fixed; inset:0; background:var(--bg); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  .setup .card { width:100%; max-width:560px; display:flex; flex-direction:column; gap:14px; }
+  .setup input { width:100%; height:60px; font-size:24px; letter-spacing:2px; padding:0 14px; border:2px solid #cfd6dd; border-radius:10px; text-transform:uppercase; font-family:Consolas,monospace; }
+  .err { color:var(--bad); font-weight:700; min-height:1.5em; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="fac" id="fac">打卡</div>
+    <div><div class="clock" id="clock">--:--</div><div class="date" id="date"></div></div>
+  </header>
+
+  <main>
+    <section class="cam" id="cam">
+      <video id="video" autoplay muted playsinline></video>
+      <div class="frame"></div>
+      <div class="camMsg hidden" id="camMsg"></div>
+      <button class="camBtn hidden" id="camBtn">開啟鏡頭<br><small>Buka kamera · Mở camera</small></button>
+    </section>
+
+    <section class="panel">
+      <!-- 等待掃卡 -->
+      <div class="card" id="stScan">
+        <div class="prompt">請把 QR 卡對準鏡頭</div>
+        <div class="sub">Arahkan kartu QR ke kamera<br>Đưa thẻ QR vào trước camera</div>
+      </div>
+      <button class="plain" id="forgotBtn">忘記帶卡<br><small>Lupa bawa kartu · Quên mang thẻ</small></button>
+
+      <!-- 忘記帶卡：點選名字 -->
+      <div class="card hidden" id="stNames">
+        <div class="prompt">請點選你的名字</div>
+        <div class="sub">Pilih nama Anda · Chọn tên của bạn</div>
+      </div>
+      <div class="names hidden" id="names"></div>
+
+      <!-- 確認身分、選上班或下班 -->
+      <div class="card hidden" id="stConfirm">
+        <div class="who" id="who"></div>
+        <div class="whoCode" id="whoCode"></div>
+        <div class="sub" style="margin-top:10px">請選擇上班或下班<br>Pilih masuk atau pulang · Chọn vào ca hoặc tan ca</div>
+        <div class="note hidden" id="forgotNote">忘記帶卡的打卡，要主管確認後才算<br>Absen tanpa kartu harus dikonfirmasi atasan<br>Chấm công không thẻ cần quản lý xác nhận</div>
+      </div>
+      <div class="actions hidden" id="actions">
+        <button class="in" data-type="上班">上班<small>Masuk kerja<br>Vào ca</small></button>
+        <button class="out" data-type="下班">下班<small>Pulang kerja<br>Tan ca</small></button>
+      </div>
+
+      <!-- 結果 -->
+      <div class="card hidden" id="stResult">
+        <div class="msg" id="resZh"></div>
+        <div class="sub" style="text-align:center" id="resOther"></div>
+        <div class="big" id="resTime"></div>
+        <div class="sub" style="text-align:center" id="resLast"></div>
+      </div>
+
+      <button class="plain hidden" id="cancelBtn">取消 · Batal · Hủy</button>
+    </section>
+  </main>
+</div>
+
+<!-- 打卡電腦第一次使用：輸入人事給的設定碼 -->
+<div class="setup hidden" id="setup">
+  <div class="card">
+    <div class="prompt">打卡電腦設定</div>
+    <div class="sub">請輸入人事提供的「設定碼」（例如 JD-ABCD-EFGH-JKLM-NPQR）。<br>九德的電腦用九德的設定碼，泰安的電腦用泰安的設定碼。</div>
+    <input id="setupInput" autocomplete="off" spellcheck="false" placeholder="JD-XXXX-XXXX-XXXX-XXXX">
+    <div class="err" id="setupErr"></div>
+    <button class="plain primary" id="setupBtn">儲存</button>
+  </div>
+</div>
+
+<script>
+  // 兩個機構的打卡紀錄服務（Google Apps Script 網頁應用程式）。網址不是秘密，沒有設定碼就無法使用。
+  const API = {
+    JD: 'https://script.google.com/macros/s/AKfycbwgxUrGN3WaOYmjI1JAInK1jCA8DPe_97BktLm7UDD4ODFzq-Asy05byQg7Bu9hMSZK/exec',
+    TA: 'https://script.google.com/macros/s/泰安的部署網址/exec'
+  };
+  const STORE = 'jdPunchSetupCode';
+
+  const T = {
+    OK:      ['打卡成功', 'Absen berhasil · Chấm công thành công', 'ok'],
+    FORGOT:  ['已登記，待主管確認', 'Tercatat, menunggu konfirmasi atasan · Đã ghi nhận, chờ quản lý xác nhận', 'warn'],
+    BAD:     ['這張卡已失效，請找人事', 'Kartu tidak berlaku, hubungi bagian personalia · Thẻ không còn hiệu lực, liên hệ nhân sự', 'bad'],
+    LOCKED:  ['這張卡暫時鎖住，請 15 分鐘後再試或找主管', 'Kartu dikunci sementara, coba lagi 15 menit atau hubungi atasan · Thẻ tạm bị khóa, thử lại sau 15 phút hoặc báo quản lý', 'bad'],
+    DUP:     ['剛剛已經打過卡了', 'Anda baru saja absen · Bạn vừa chấm công rồi', 'bad'],
+    FAC:     ['這張卡不是本機構的', 'Kartu ini bukan untuk tempat ini · Thẻ này không thuộc cơ sở này', 'bad'],
+    KEY:     ['這台打卡電腦的設定碼不對，請找人事', 'Hubungi bagian personalia · Liên hệ nhân sự', 'bad'],
+    ERR:     ['連線失敗，請再試一次；仍失敗請在紙本簽到表登記', 'Koneksi gagal, coba lagi. Jika gagal, tulis di lembar absen kertas · Lỗi kết nối, thử lại. Nếu vẫn lỗi, ghi vào sổ chấm công giấy', 'bad'],
+    NOCAM:   '無法開啟鏡頭，請通知人事；可先按「忘記帶卡」打卡 · Kamera tidak bisa dibuka · Không mở được camera',
+    ASK:     '請看網址列右邊的鏡頭圖示，選「允許」 · Izinkan kamera · Cho phép camera',
+    NODETECT:'這台電腦不支援掃 QR，請通知人事；可先按「忘記帶卡」打卡 · QR tidak didukung · Không hỗ trợ quét QR',
+    last:    '上次打卡 · Absen terakhir · Lần trước',
+    typeName: { '上班': '上班 · Masuk · Vào ca', '下班': '下班 · Pulang · Tan ca' }
+  };
+
+  const $ = id => document.getElementById(id);
+  let info = { facility: '', fcode: '' }, offset = 0;
+  let state = 'scan', who = null, busy = false, timer = null;
+  let detector = null, lastRaw = '', lastRawAt = 0, names = [];
+
+  /* ───── 設定碼與連線 ───── */
+
+  function load(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+  function save(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+  // 設定碼「JD-ABCD-EFGH-JKLM-NPQR」：輸入時不管大小寫、空格或少打橫線，都整理成標準格式
+  function normCode(s) {
+    const t = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const m = t.match(/^(JD|TA)([A-Z2-9]{16})$/);
+    return m ? m[1] + '-' + m[2].match(/.{4}/g).join('-') : t;
+  }
+  const validCode = s => /^(JD|TA)(-[A-Z2-9]{4}){4}$/.test(s);
+  let setupCode = normCode(load(STORE));
+
+  function showSetup(err) {
+    $('setup').classList.remove('hidden');
+    $('setupErr').textContent = err || '';
+    $('setupInput').value = setupCode;
+    $('setupInput').focus();
+  }
+
+  $('setupBtn').onclick = () => {
+    const c = normCode($('setupInput').value);
+    if (!validCode(c)) { $('setupErr').textContent = '設定碼格式不對，請再檢查一次'; return; }
+    setupCode = c;
+    if (!save(STORE, c)) { $('setupErr').textContent = '這個瀏覽器不能儲存設定（可能是無痕視窗），請改用一般視窗'; return; }
+    $('setupErr').textContent = '連線中…';
+    start(true);
+  };
+  $('setupInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('setupBtn').click(); });
+
+  /** 呼叫打卡紀錄服務。用 text/plain 送出，瀏覽器不會先發額外的確認請求。 */
+  async function api(action, data) {
+    const url = API[setupCode.slice(0, 2)];
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 20000);
+    try {
+      const r = await fetch(url, { method: 'POST', body: JSON.stringify(Object.assign({ key: setupCode, action }, data || {})), signal: ctl.signal });
+      return await r.json();
+    } finally { clearTimeout(t); }
+  }
+
+  async function start(fromSetup) {
+    if (!validCode(setupCode) || new URLSearchParams(location.search).has('setup') && !fromSetup) { showSetup(); return; }
+    let r;
+    try { r = await api('info'); } catch (e) { r = { status: 'ERR' }; }
+    if (r.status === 'KEY') { showSetup('設定碼不對，請再檢查一次'); return; }
+    if (r.status !== 'OK') {
+      if (fromSetup) { $('setupErr').textContent = '連不上打卡服務，請確認網路後再按一次「儲存」'; return; }
+      $('fac').textContent = '打卡（連線中…）';
+      setTimeout(() => start(false), 30000);
+      return;
+    }
+    if (fromSetup && location.search) history.replaceState(null, '', location.pathname);
+    $('setup').classList.add('hidden');
+    info = r; offset = r.now - Date.now();
+    $('fac').textContent = r.facility + ' 打卡';
+    document.title = r.facility + ' 打卡';
+    loadNames();
+    if (!camStarted) { camStarted = true; startCamera(); }
+  }
+
+  async function loadNames() {
+    try { const r = await api('names'); if (r.status === 'OK') names = r.names || []; } catch (e) {}
+  }
+  setInterval(loadNames, 30 * 60000);                 // 新匯入的員工 30 分鐘內會出現在名單
+  setInterval(async () => {                           // 每小時重新對時
+    try { const r = await api('info'); if (r.status === 'OK') offset = r.now - Date.now(); } catch (e) {}
+  }, 60 * 60000);
+
+  function tick() {
+    const d = new Date(Date.now() + offset);
+    const p = n => String(n).padStart(2, '0');
+    $('clock').textContent = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    $('date').textContent = d.getFullYear() - 1911 + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate());
+  }
+  setInterval(tick, 500); tick();
+
+  /* ───── 鏡頭與 QR 辨識 ───── */
+
+  let camStarted = false, camStarting = false;
+  async function startCamera() {
+    if (camStarting || $('video').srcObject) return;
+    camStarting = true;
+    $('camBtn').classList.add('hidden');
+    const slow = setTimeout(() => camMsg(T.ASK), 6000);   // 6 秒還沒開，可能是瀏覽器在等使用者允許
+    try {
+      // 括號裡的英文是原因代碼，回報問題時一起抄下來
+      if (document.featurePolicy && !document.featurePolicy.allowsFeature('camera')) throw { name: 'PolicyBlocked' };
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'NoMediaDevices' };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      $('video').srcObject = stream;
+      await $('video').play();
+      camMsg('');
+    } catch (e) {
+      console.error(e);
+      camMsg(T.NOCAM + '（' + ((e && e.name) || 'Error') + '）');
+      $('camBtn').classList.remove('hidden');
+      setTimeout(startCamera, 30000);                 // 鏡頭被拔掉或沒授權時，每 30 秒重試
+      return;
+    } finally {
+      clearTimeout(slow);
+      camStarting = false;
+    }
+    if (!detector) {
+      try {
+        if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats()).includes('qr_code')) {
+          detector = new BarcodeDetector({ formats: ['qr_code'] });
+        }
+      } catch (e) { console.error(e); }
+      if (!detector) { camMsg(T.NODETECT); return; }
+      scanLoop();
+    }
+  }
+
+  function camMsg(t) { $('camMsg').textContent = t; $('camMsg').classList.toggle('hidden', !t); }
+
+  async function scanLoop() {
+    try {
+      const v = $('video');
+      if (state === 'scan' && v.readyState >= 2) {
+        const found = await detector.detect(v);
+        for (const f of found) { if (onScan(f.rawValue)) break; }
+      }
+    } catch (e) { /* 單張影像辨識失敗就略過 */ }
+    setTimeout(scanLoop, 150);
+  }
+
+  /** 卡片內容「JDP1|機構代碼|員工代號|密碼|姓名(base64)」；姓名只在這台電腦顯示。 */
+  function onScan(raw) {
+    raw = String(raw || '').trim();
+    const p = raw.split('|');
+    if (p[0] !== 'JDP1' || p.length < 5) return false;
+    // 剛打完卡、卡還在鏡頭前，6 秒內不重複跳出
+    if (raw === lastRaw && Date.now() - lastRawAt < 6000) return false;
+    lastRaw = raw; lastRawAt = Date.now();
+    beep();
+    if (info.fcode && p[1] !== info.fcode) { showResult({ status: 'FAC' }); return true; }
+    let name = '';
+    try { name = decodeName(p[4]); } catch (e) {}
+    who = { mode: 'qr', raw, code: p[2], name };
+    go('confirm');
+    return true;
+  }
+
+  function decodeName(b64url) {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64 + '==='.slice((b64.length + 3) % 4));
+    return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  }
+
+  let audio = null;
+  function beep() {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 1200; g.gain.value = 0.15;
+      o.connect(g); g.connect(audio.destination);
+      o.start(); o.stop(audio.currentTime + 0.12);
+    } catch (e) {}
+  }
+
+  /* ───── 畫面狀態 ───── */
+
+  function go(s) {
+    state = s;
+    $('cam').classList.toggle('paused', s !== 'scan');
+    $('stScan').classList.toggle('hidden', s !== 'scan');
+    $('forgotBtn').classList.toggle('hidden', s !== 'scan');
+    $('stNames').classList.toggle('hidden', s !== 'names');
+    $('names').classList.toggle('hidden', s !== 'names');
+    $('stConfirm').classList.toggle('hidden', s !== 'confirm');
+    $('actions').classList.toggle('hidden', s !== 'confirm');
+    $('stResult').classList.toggle('hidden', s !== 'result');
+    $('cancelBtn').classList.toggle('hidden', s !== 'names' && s !== 'confirm');
+    if (s === 'confirm') {
+      $('who').textContent = who.name || ('代號 ' + who.code);
+      $('whoCode').textContent = who.name ? '員工代號 ' + who.code : '';
+      $('forgotNote').classList.toggle('hidden', who.mode !== 'forgot');
+    }
+    clearTimeout(timer);
+    if (s === 'names') timer = setTimeout(() => go('scan'), 30000);
+    if (s === 'confirm') timer = setTimeout(() => go('scan'), 15000);   // 15 秒沒按就取消
+  }
+
+  function showNames() {
+    const box = $('names');
+    box.innerHTML = '';
+    names.forEach(x => {
+      const b = document.createElement('button');
+      b.textContent = x.n;
+      b.onclick = () => { who = { mode: 'forgot', code: x.c, name: x.n }; go('confirm'); };
+      box.appendChild(b);
+    });
+    if (!names.length) { box.innerHTML = '<div class="sub">名單載入中，請稍候再按一次</div>'; loadNames(); }
+    go('names');
+    box.scrollTop = 0;
+  }
+
+  async function submit(type) {
+    if (busy || !who) return;
+    busy = true;
+    clearTimeout(timer);
+    let r;
+    try {
+      r = who.mode === 'qr' ? await api('qr', { qr: who.raw, type }) : await api('forgot', { code: who.code, type });
+    } catch (e) { r = { status: 'ERR' }; }
+    showResult(r || { status: 'ERR' }, type);
+  }
+
+  function showResult(r, type) {
+    busy = false;
+    const key = r.status === 'OK' && who && who.mode === 'forgot' ? 'FORGOT' : r.status;
+    const t = T[key] || T.ERR;
+    $('resZh').textContent = (who && r.status !== 'FAC' && who.name ? who.name + '　' : '') + t[0];
+    $('resZh').className = 'msg ' + t[2];
+    $('resOther').textContent = t[1];
+    $('resTime').textContent = (r.status === 'OK' || r.status === 'DUP') && type ? T.typeName[type] + '  ' + (r.time || '') : '';
+    $('resLast').textContent = r.last ? T.last + '：' + r.last.type + ' ' + r.last.time : '';
+    go('result');
+    who = null;
+    lastRawAt = Date.now();
+    timer = setTimeout(() => go('scan'), r.status === 'OK' ? 4000 : 7000);
+  }
+
+  $('camBtn').onclick = startCamera;
+  $('forgotBtn').onclick = showNames;
+  $('cancelBtn').onclick = () => { who = null; go('scan'); };
+  document.querySelectorAll('#actions button').forEach(b => b.onclick = () => submit(b.dataset.type));
+
+  // 打卡電腦整天開著，盡量不讓螢幕自動關閉（瀏覽器不允許時就略過）
+  async function keepAwake() { try { await navigator.wakeLock.request('screen'); } catch (e) {} }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+  keepAwake();
+
+  go('scan');
+  start(false);
+</script>
+</body>
+</html>
